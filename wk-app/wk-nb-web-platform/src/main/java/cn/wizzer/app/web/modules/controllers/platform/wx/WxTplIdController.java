@@ -8,8 +8,6 @@ import cn.wizzer.app.wx.modules.models.Wx_tpl_id;
 import cn.wizzer.app.wx.modules.services.WxConfigService;
 import cn.wizzer.app.wx.modules.services.WxTplIdService;
 import cn.wizzer.framework.base.Result;
-import cn.wizzer.framework.page.datatable.DataTableColumn;
-import cn.wizzer.framework.page.datatable.DataTableOrder;
 import com.alibaba.dubbo.config.annotation.Reference;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.nutz.dao.Cnd;
@@ -44,31 +42,29 @@ public class WxTplIdController {
     @Ok("beetl:/platform/wx/tpl/id/index.html")
     @RequiresPermissions("wx.tpl.id")
     public void index(String wxid, HttpServletRequest req) {
+        Wx_config wxConfig = null;
         List<Wx_config> list = wxConfigService.query(Cnd.NEW());
         if (list.size() > 0 && Strings.isBlank(wxid)) {
-            wxid = list.get(0).getId();
+            wxConfig = list.get(0);
         }
+        if (Strings.isNotBlank(wxid)) {
+            wxConfig = wxConfigService.fetch(wxid);
+        }
+        req.setAttribute("wxConfig", wxConfig);
         req.setAttribute("wxList", list);
-        req.setAttribute("wxid", Strings.sBlank(wxid));
     }
 
     @At
     @Ok("json:full")
     @RequiresPermissions("wx.tpl.id")
-    public Object data(@Param("wxid") String wxid, @Param("length") int length, @Param("start") int start, @Param("draw") int draw, @Param("::order") List<DataTableOrder> order, @Param("::columns") List<DataTableColumn> columns) {
+    public Object data(@Param("wxid") String wxid, @Param("searchName") String searchName, @Param("searchKeyword") String searchKeyword, @Param("pageNumber") int pageNumber, @Param("pageSize") int pageSize, @Param("pageOrderName") String pageOrderName, @Param("pageOrderBy") String pageOrderBy) {
         Cnd cnd = Cnd.NEW();
         if (!Strings.isBlank(wxid)) {
             cnd.and("wxid", "=", wxid);
         }
-        return wxTplIdService.data(length, start, draw, order, columns, cnd, null);
+        return Result.success().addData(wxTplIdService.listPage(pageNumber, pageSize, cnd));
     }
 
-    @At
-    @Ok("beetl:/platform/wx/tpl/id/add.html")
-    @RequiresPermissions("wx.tpl.id")
-    public void add(String wxid, HttpServletRequest req) {
-        req.setAttribute("wxid", wxid);
-    }
 
     @At
     @Ok("json")
@@ -79,14 +75,14 @@ public class WxTplIdController {
             WxApi2 wxApi2 = wxService.getWxApi2(wxTplId.getWxid());
             WxResp wxResp = wxApi2.template_api_add_template(wxTplId.getId());
             if (wxResp.errcode() == 0) {
-                wxTplId.setTemplate_id(wxResp.template_id());
                 wxTplId.setOpBy(StringUtil.getPlatformUid());
+                wxTplId.setTemplate_id(wxResp.template_id());
                 wxTplIdService.insert(wxTplId);
-                return Result.success("system.success");
+                return Result.success();
             }
-            return Result.error("system.error");
+            return Result.error(wxResp.errmsg());
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -100,11 +96,11 @@ public class WxTplIdController {
             WxApi2 wxApi2 = wxService.getWxApi2(wxid);
             if (ids != null && ids.length > 0) {
                 for (String i : ids) {
-                    Wx_tpl_id wxTplId = wxTplIdService.fetch(Cnd.where("id", "=", i).and("wxid", "=", wxid));
+                    Wx_tpl_id wxTplId = wxTplIdService.fetch(Cnd.where("id", "=", id).and("wxid", "=", wxid));
                     WxResp wxResp = wxApi2.template_api_del_template(wxTplId.getTemplate_id());
                     if (wxResp.errcode() == 0) {
                         wxTplIdService.clear(Cnd.where("id", "=", i).and("wxid", "=", wxid));
-                        return Result.success("system.success");
+                        return Result.success();
                     }
                 }
                 wxTplIdService.delete(ids);
@@ -114,26 +110,14 @@ public class WxTplIdController {
                 WxResp wxResp = wxApi2.template_api_del_template(wxTplId.getTemplate_id());
                 if (wxResp.errcode() == 0) {
                     wxTplIdService.clear(Cnd.where("id", "=", id).and("wxid", "=", wxid));
-                    return Result.success("system.success");
+                    return Result.success();
                 }
                 req.setAttribute("id", id);
             }
-            return Result.success("system.error");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
-    }
-
-
-    @At("/detail/?")
-    @Ok("beetl:/platform/wx/tpl/id/detail.html")
-    @RequiresPermissions("wx.tpl.id")
-    public Object detail(String id) {
-        if (!Strings.isBlank(id)) {
-            return wxTplIdService.fetch(id);
-
-        }
-        return null;
     }
 
 }

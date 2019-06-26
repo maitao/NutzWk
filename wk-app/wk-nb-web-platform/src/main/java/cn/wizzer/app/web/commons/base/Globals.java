@@ -32,8 +32,6 @@ public class Globals {
     public static String AppFileDomain = "";
     //文件上传路径
     public static String AppUploadBase = "/upload";
-    // 是否启用了队列
-    public static boolean RabbitMQEnabled = false;
     //系统自定义参数
     public static NutMap MyConfig = NutMap.NEW();
     //自定义路由

@@ -3,9 +3,9 @@ package cn.wizzer.app.web.modules.controllers.platform.sys;
 import cn.wizzer.app.sys.modules.models.Sys_menu;
 import cn.wizzer.app.sys.modules.services.SysMenuService;
 import cn.wizzer.app.web.commons.base.Globals;
+import cn.wizzer.app.web.commons.utils.ShiroUtil;
 import com.alibaba.dubbo.config.annotation.Reference;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
-import org.nutz.dao.Cnd;
 import org.nutz.ioc.loader.annotation.Inject;
 import org.nutz.ioc.loader.annotation.IocBean;
 import org.nutz.lang.Strings;
@@ -30,6 +30,8 @@ public class SysHomeController {
     @Inject
     @Reference
     private SysMenuService sysMenuService;
+    @Inject
+    private ShiroUtil shiroUtil;
 
     @At("")
     @Ok("beetl:/platform/sys/home.html")
@@ -45,6 +47,7 @@ public class SysHomeController {
     public void left(@Param("url") String url, HttpServletRequest req) {
         String path = "";
         String perpath = "";
+        url = Strings.sNull(url).trim();
         if (!Strings.isBlank(Globals.AppBase)) {
             url = Strings.sBlank(url).substring(Globals.AppBase.length());
         }
@@ -52,10 +55,8 @@ public class SysHomeController {
             url = url.substring(0, url.indexOf("?"));
         Sys_menu menu = sysMenuService.getLeftMenu(url);
         if (menu != null) {
-            if (menu.getPath().length() > 8) {
+            if (menu.getPath().length() >= 8) {
                 path = menu.getPath().substring(0, 8);
-                perpath = menu.getPath().substring(0, 4);
-            } else if (menu.getPath().length() == 8) {
                 perpath = menu.getPath().substring(0, 4);
             }
             req.setAttribute("mpath", menu.getPath());
@@ -68,6 +69,7 @@ public class SysHomeController {
     @Ok("beetl:/platform/sys/left.html")
     @RequiresAuthentication
     public void path(@Param("url") String url, HttpServletRequest req) {
+        url = Strings.sNull(url).trim();
         if (Strings.sBlank(url).indexOf("//") > 0) {
             String[] u = url.split("//");
             String s = u[1].substring(u[1].indexOf("/"));
@@ -103,16 +105,44 @@ public class SysHomeController {
             String perpath = "";
             Sys_menu menu = sysMenuService.getLeftPathMenu(list);
             if (menu != null) {
-                if (menu.getPath().length() > 8) {
+                if (menu.getPath().length() >= 8) {
                     path = menu.getPath().substring(0, 8);
-                    perpath = menu.getPath().substring(0, 4);
-                } else if (menu.getPath().length() == 8) {
                     perpath = menu.getPath().substring(0, 4);
                 }
                 req.setAttribute("mpath", menu.getPath());
             }
             req.setAttribute("path", path);
             req.setAttribute("perpath", perpath);
+        }
+    }
+
+    @At("/403")
+    @Ok("re")
+    public Object error403() {
+        if (shiroUtil.isAuthenticated()) {
+            return "beetl:/platform/sys/403.html";
+        } else {
+            return ">>:/error/404.html";
+        }
+    }
+
+    @At("/404")
+    @Ok("re")
+    public Object error404() {
+        if (shiroUtil.isAuthenticated()) {
+            return "beetl:/platform/sys/404.html";
+        } else {
+            return ">>:/error/404.html";
+        }
+    }
+
+    @At("/500")
+    @Ok("re")
+    public Object error500() {
+        if (shiroUtil.isAuthenticated()) {
+            return "beetl:/platform/sys/500.html";
+        } else {
+            return ">>:/error/500.html";
         }
     }
 

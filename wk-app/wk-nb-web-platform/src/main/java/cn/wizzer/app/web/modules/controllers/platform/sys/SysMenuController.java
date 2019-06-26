@@ -2,18 +2,23 @@ package cn.wizzer.app.web.modules.controllers.platform.sys;
 
 import cn.wizzer.app.sys.modules.models.Sys_menu;
 import cn.wizzer.app.sys.modules.services.SysMenuService;
+import cn.wizzer.app.sys.modules.services.SysRoleService;
+import cn.wizzer.app.sys.modules.services.SysUserService;
 import cn.wizzer.app.web.commons.slog.annotation.SLog;
 import cn.wizzer.app.web.commons.utils.StringUtil;
 import cn.wizzer.framework.base.Result;
 import com.alibaba.dubbo.config.annotation.Reference;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.shiro.authz.annotation.RequiresAuthentication;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
 import org.nutz.dao.Cnd;
 import org.nutz.dao.Sqls;
 import org.nutz.ioc.loader.annotation.Inject;
 import org.nutz.ioc.loader.annotation.IocBean;
+import org.nutz.json.Json;
+import org.nutz.lang.Lang;
 import org.nutz.lang.Strings;
-import org.nutz.lang.Times;
+import org.nutz.lang.util.NutMap;
 import org.nutz.log.Log;
 import org.nutz.log.Logs;
 import org.nutz.mvc.annotation.At;
@@ -22,9 +27,7 @@ import org.nutz.mvc.annotation.Param;
 
 import javax.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Created by wizzer on 2016/6/28.
@@ -36,73 +39,198 @@ public class SysMenuController {
     @Inject
     @Reference
     private SysMenuService sysMenuService;
+    @Inject
+    @Reference
+    private SysUserService sysUserService;
+    @Inject
+    @Reference
+    private SysRoleService sysRoleService;
 
     @At("")
     @Ok("beetl:/platform/sys/menu/index.html")
     @RequiresPermissions("sys.manager.menu")
     public void index(HttpServletRequest req) {
-        req.setAttribute("list", sysMenuService.query(Cnd.where("parentId", "=", "").or("parentId", "is", null).asc("location").asc("path")));
     }
 
-    @At
-    @Ok("beetl:/platform/sys/menu/add.html")
-    @RequiresPermissions("sys.manager.menu")
-    public Object add(@Param("pid") String pid, HttpServletRequest req) {
-        return Strings.isBlank(pid) ? null : sysMenuService.fetch(pid);
+    @At("/child")
+    @Ok("json")
+    @RequiresAuthentication
+    public Object child(@Param("pid") String pid, HttpServletRequest req) {
+        List<Sys_menu> list = new ArrayList<>();
+        List<NutMap> treeList = new ArrayList<>();
+        Cnd cnd = Cnd.NEW();
+        if (Strings.isBlank(pid)) {
+            cnd.and(Cnd.exps("parentId", "=", "").or("parentId", "is", null));
+        } else {
+            cnd.and("parentId", "=", pid);
+        }
+        cnd.asc("location").asc("path");
+        list = sysMenuService.query(cnd);
+        for (Sys_menu menu : list) {
+            if (sysMenuService.count(Cnd.where("parentId", "=", menu.getId())) > 0) {
+                menu.setHasChildren(true);
+            }
+            NutMap map = Lang.obj2nutmap(menu);
+            map.addv("expanded", false);
+            map.addv("children", new ArrayList<>());
+            treeList.add(map);
+        }
+        return Result.success().addData(treeList);
+    }
+
+    @At("/tree")
+    @Ok("json")
+    @RequiresAuthentication
+    public Object tree(@Param("pid") String pid, HttpServletRequest req) {
+        try {
+            List<NutMap> treeList = new ArrayList<>();
+            if (Strings.isBlank(pid)) {
+                NutMap root = NutMap.NEW().addv("value", "root").addv("label", "不选择菜单");
+                treeList.add(root);
+            }
+            Cnd cnd = Cnd.NEW();
+            if (Strings.isBlank(pid)) {
+                cnd.and(Cnd.exps("parentId", "=", "").or("parentId", "is", null));
+            } else {
+                cnd.and("parentId", "=", pid);
+            }
+            cnd.and("type", "=", "menu");
+            cnd.asc("location").asc("path");
+            List<Sys_menu> list = sysMenuService.query(cnd);
+            for (Sys_menu menu : list) {
+                NutMap map = NutMap.NEW().addv("value", menu.getId()).addv("label", menu.getName());
+                if (menu.isHasChildren()) {
+                    map.addv("children", new ArrayList<>());
+                }
+                treeList.add(map);
+            }
+            return Result.success().addData(treeList);
+        } catch (Exception e) {
+            return Result.error();
+        }
     }
 
     @At
     @Ok("json")
     @RequiresPermissions("sys.manager.menu.add")
-    @SLog(tag = "新建菜单", msg = "菜单名称:${args[0].name}")
-    public Object addDo(@Param("..") Sys_menu menu, @Param("parentId") String parentId, HttpServletRequest req) {
+    @SLog(tag = "新建菜单", msg = "菜单名称:${args[1].getAttribute('name')}")
+    public Object addDo(@Param("..") NutMap nutMap, HttpServletRequest req) {
         try {
-            int num = sysMenuService.count(Cnd.where("permission", "=", menu.getPermission().trim()));
+            Sys_menu sysMenu = nutMap.getAs("menu", Sys_menu.class);
+            List<NutMap> buttons = Json.fromJsonAsList(NutMap.class, nutMap.getString("buttons"));
+            int num = sysMenuService.count(Cnd.where("permission", "=", sysMenu.getPermission().trim()));
             if (num > 0) {
                 return Result.error("sys.role.code");
             }
-            if ("data".equals(menu.getType())) {
-                menu.setShowit(false);
-            } else menu.setShowit(true);
-            menu.setOpBy(StringUtil.getPlatformUid());
-            sysMenuService.save(menu, parentId,null);
+            for (NutMap map : buttons) {
+                num = sysMenuService.count(Cnd.where("permission", "=", map.getString("permission", "").trim()));
+                if (num > 0) {
+                    return Result.error("sys.role.code");
+                }
+            }
+            sysMenu.setHasChildren(false);
+            sysMenu.setShowit(true);
+            sysMenu.setOpBy(StringUtil.getPlatformUid());
+            sysMenuService.save(sysMenu, Strings.sNull(sysMenu.getParentId()), buttons);
+            req.setAttribute("name", sysMenu.getName());
             sysMenuService.clearCache();
-            return Result.success("system.success");
+            sysUserService.clearCache();
+            sysRoleService.clearCache();
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
-    @At("/edit/?")
-    @Ok("beetl:/platform/sys/menu/edit.html")
+    //编辑菜单,组装一下js表单数据
+    @At("/editMenu/?")
+    @Ok("json")
     @RequiresPermissions("sys.manager.menu")
-    public Object edit(String id, HttpServletRequest req) {
-        Sys_menu menu = sysMenuService.fetch(id);
-        if (menu != null) {
-            req.setAttribute("parentMenu", sysMenuService.fetch(menu.getParentId()));
+    public Object editMenu(String id, HttpServletRequest req) {
+        try {
+            Sys_menu menu = sysMenuService.fetch(id);
+            NutMap map = Lang.obj2nutmap(menu);
+            map.put("parentName", "无");
+            map.put("children", "false");
+            if (Strings.isNotBlank(menu.getParentId())) {
+                map.put("parentName", sysMenuService.fetch(menu.getParentId()).getName());
+            }
+            List<Sys_menu> list = sysMenuService.query(Cnd.where("parentId", "=", id).and("type", "=", "data").asc("location").asc("path"));
+            List<NutMap> buttons = new ArrayList<>();
+            if (list != null && list.size() > 0) {
+                map.put("children", "true");
+                for (Sys_menu m : list) {
+                    buttons.add(NutMap.NEW().addv("key", m.getId()).addv("name", m.getName()).addv("permission", m.getPermission()));
+                }
+            }
+            map.put("buttons", buttons);
+            return Result.success().addData(map);
+        } catch (Exception e) {
+            return Result.error();
         }
-        return menu;
     }
 
     @At
     @Ok("json")
     @RequiresPermissions("sys.manager.menu.edit")
-    @SLog(tag = "编辑菜单", msg = "菜单名称:${args[0].name}")
-    public Object editDo(@Param("..") Sys_menu menu, @Param("oldPermission") String oldPermission, HttpServletRequest req) {
+    @SLog(tag = "修改菜单", msg = "菜单名称:${args[1].getAttribute('name')}")
+    public Object editMenuDo(@Param("..") NutMap nutMap, HttpServletRequest req) {
         try {
-            if (!Strings.sBlank(oldPermission).equals(menu.getPermission())) {
-                int num = sysMenuService.count(Cnd.where("permission", "=", menu.getPermission().trim()));
+            Sys_menu sysMenu = nutMap.getAs("menu", Sys_menu.class);
+            List<NutMap> buttons = Json.fromJsonAsList(NutMap.class, nutMap.getString("buttons"));
+            //如果权限标识不是自己的,并且被其他记录占用
+            int num = sysMenuService.count(Cnd.where("permission", "=", sysMenu.getPermission().trim()).and("id", "<>", sysMenu.getId()));
+            if (num > 0) {
+                return Result.error("sys.role.code");
+            }
+            for (NutMap map : buttons) {
+                num = sysMenuService.count(Cnd.where("permission", "=", map.getString("permission", "").trim()).and("id", "<>", map.getString("key", "")));
                 if (num > 0) {
                     return Result.error("sys.role.code");
                 }
             }
-            menu.setOpBy(StringUtil.getPlatformUid());
-            menu.setOpAt(Times.getTS());
+            sysMenu.setHasChildren(false);
+            sysMenu.setShowit(true);
+            sysMenu.setOpBy(StringUtil.getPlatformUid());
+            sysMenuService.edit(sysMenu, sysMenu.getParentId(), buttons);
+            req.setAttribute("name", sysMenu.getName());
+            sysMenuService.clearCache();
+            sysUserService.clearCache();
+            sysRoleService.clearCache();
+            return Result.success();
+        } catch (Exception e) {
+            return Result.error();
+        }
+    }
+
+    @At("/editData/?")
+    @Ok("json")
+    @RequiresPermissions("sys.manager.menu")
+    public Object editData(String id, HttpServletRequest req) {
+        try {
+            return Result.success().addData(sysMenuService.fetch(id));
+        } catch (Exception e) {
+            return Result.error();
+        }
+    }
+
+    @At
+    @Ok("json")
+    @RequiresPermissions("sys.manager.menu.edit")
+    @SLog(tag = "修改权限", msg = "权限名称:${args[0].name}")
+    public Object editDataDo(@Param("..") Sys_menu menu, HttpServletRequest req) {
+        try {
+            int num = sysMenuService.count(Cnd.where("permission", "=", menu.getPermission().trim()).and("id", "<>", menu.getId()));
+            if (num > 0) {
+                return Result.error("sys.role.code");
+            }
             sysMenuService.updateIgnoreNull(menu);
             sysMenuService.clearCache();
-            return Result.success("system.success");
+            sysUserService.clearCache();
+            sysRoleService.clearCache();
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -119,9 +247,11 @@ public class SysMenuController {
             }
             sysMenuService.deleteAndChild(menu);
             sysMenuService.clearCache();
-            return Result.success("system.success");
+            sysUserService.clearCache();
+            sysRoleService.clearCache();
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -134,9 +264,11 @@ public class SysMenuController {
             req.setAttribute("name", sysMenuService.fetch(menuId).getName());
             sysMenuService.update(org.nutz.dao.Chain.make("disabled", false), Cnd.where("id", "=", menuId));
             sysMenuService.clearCache();
-            return Result.success("system.success");
+            sysUserService.clearCache();
+            sysRoleService.clearCache();
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -149,75 +281,47 @@ public class SysMenuController {
             req.setAttribute("name", sysMenuService.fetch(menuId).getName());
             sysMenuService.update(org.nutz.dao.Chain.make("disabled", true), Cnd.where("id", "=", menuId));
             sysMenuService.clearCache();
-            return Result.success("system.success");
+            sysUserService.clearCache();
+            sysRoleService.clearCache();
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
-    @At
+    @At("/menuAll")
     @Ok("json")
     @RequiresPermissions("sys.manager.menu")
-    public Object tree(@Param("pid") String pid) {
-        Cnd cnd = Cnd.NEW();
-        if (Strings.isBlank(pid)) {
-            cnd.and(Cnd.exps("parentId", "=", "").or("parentId", "is", null));
-        } else {
-            cnd.and("parentId", "=", pid);
-        }
-        cnd.and("type", "=", "menu");
-        cnd.asc("location").asc("path");
-        List<Sys_menu> list = sysMenuService.query(cnd);
-        List<Map<String, Object>> tree = new ArrayList<>();
-        for (Sys_menu menu : list) {
-            Map<String, Object> obj = new HashMap<>();
-            obj.put("id", menu.getId());
-            obj.put("text", menu.getName());
-            obj.put("children", menu.isHasChildren());
-            tree.add(obj);
-        }
-        return tree;
-    }
-
-    @At("/child/?")
-    @Ok("beetl:/platform/sys/menu/child.html")
-    @RequiresPermissions("sys.manager.menu")
-    public Object child(String id) {
-        Sys_menu m = sysMenuService.fetch(id);
-        List<Sys_menu> list = new ArrayList<>();
-        List<Sys_menu> menus = sysMenuService.query(Cnd.where("parentId", "=", id).asc("location").asc("path"));
-        List<Sys_menu> datas = sysMenuService.query(Cnd.where("path", "like", Strings.sBlank(m.getPath()) + "________").and("type", "=", "data").asc("location").asc("path"));
-        for (Sys_menu menu : menus) {
-            for (Sys_menu bt : datas) {
-                if (menu.getPath().equals(bt.getPath().substring(0, bt.getPath().length() - 4))) {
-                    menu.setHasChildren(true);
-                    break;
+    public Object menuAll(HttpServletRequest req) {
+        try {
+            List<Sys_menu> list = sysMenuService.query(Cnd.where("type", "=", "menu").asc("location").asc("path"));
+            NutMap menuMap = NutMap.NEW();
+            for (Sys_menu unit : list) {
+                List<Sys_menu> list1 = menuMap.getList(unit.getParentId(), Sys_menu.class);
+                if (list1 == null) {
+                    list1 = new ArrayList<>();
                 }
+                list1.add(unit);
+                menuMap.put(unit.getParentId(), list1);
             }
-            list.add(menu);
+            return Result.success().addData(getTree(menuMap, ""));
+        } catch (Exception e) {
+            return Result.error();
         }
-        return list;
     }
 
-    @At
-    @Ok("beetl:/platform/sys/menu/sort.html")
-    @RequiresPermissions("sys.manager.menu")
-    public void sort(HttpServletRequest req) {
-        List<Sys_menu> list = sysMenuService.query(Cnd.orderBy().asc("location").asc("path"));
-        List<Sys_menu> firstMenus = new ArrayList<>();
-        Map<String, List<Sys_menu>> secondMenus = new HashMap<>();
-        for (Sys_menu menu : list) {
-            if (menu.getPath().length() > 4) {
-                List<Sys_menu> s = secondMenus.get(StringUtil.getParentId(menu.getPath()));
-                if (s == null) s = new ArrayList<>();
-                s.add(menu);
-                secondMenus.put(StringUtil.getParentId(menu.getPath()), s);
-            } else if (menu.getPath().length() == 4) {
-                firstMenus.add(menu);
+    private List<NutMap> getTree(NutMap menuMap, String pid) {
+        List<NutMap> treeList = new ArrayList<>();
+        List<Sys_menu> subList = menuMap.getList(pid, Sys_menu.class);
+        for (Sys_menu menu : subList) {
+            NutMap map = Lang.obj2nutmap(menu);
+            map.put("label", menu.getName());
+            if (menu.isHasChildren() || (menuMap.get(menu.getId()) != null)) {
+                map.put("children", getTree(menuMap, menu.getId()));
             }
+            treeList.add(map);
         }
-        req.setAttribute("firstMenus", firstMenus);
-        req.setAttribute("secondMenus", secondMenus);
+        return treeList;
     }
 
     @At
@@ -235,9 +339,11 @@ public class SysMenuController {
                 }
             }
             sysMenuService.clearCache();
-            return Result.success("system.success");
+            sysUserService.clearCache();
+            sysRoleService.clearCache();
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 }

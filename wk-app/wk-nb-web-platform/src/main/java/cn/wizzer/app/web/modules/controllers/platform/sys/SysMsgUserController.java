@@ -5,8 +5,6 @@ import cn.wizzer.app.sys.modules.services.SysMsgUserService;
 import cn.wizzer.app.web.commons.slog.annotation.SLog;
 import cn.wizzer.app.web.commons.utils.StringUtil;
 import cn.wizzer.framework.base.Result;
-import cn.wizzer.framework.page.datatable.DataTableColumn;
-import cn.wizzer.framework.page.datatable.DataTableOrder;
 import com.alibaba.dubbo.config.annotation.Reference;
 import org.apache.shiro.authz.annotation.Logical;
 import org.apache.shiro.authz.annotation.RequiresPermissions;
@@ -17,6 +15,8 @@ import org.nutz.dao.sql.Sql;
 import org.nutz.ioc.loader.annotation.Inject;
 import org.nutz.ioc.loader.annotation.IocBean;
 import org.nutz.lang.Strings;
+import org.nutz.lang.Times;
+import org.nutz.lang.util.NutMap;
 import org.nutz.log.Log;
 import org.nutz.log.Logs;
 import org.nutz.mvc.annotation.At;
@@ -24,7 +24,6 @@ import org.nutz.mvc.annotation.Ok;
 import org.nutz.mvc.annotation.Param;
 
 import javax.servlet.http.HttpServletRequest;
-import java.util.List;
 
 @IocBean
 @At("/platform/sys/msg/user")
@@ -37,49 +36,54 @@ public class SysMsgUserController {
     @Reference
     private SysMsgService sysMsgService;
 
-    @At("/all")
+    @At({"/all", "/all/?"})
     @Ok("beetl:/platform/sys/msg/user/indexAll.html")
     @RequiresPermissions("sys.msg.all")
-    public void index(HttpServletRequest req) {
-        req.setAttribute("status", "all");
+    public void index(String type, HttpServletRequest req) {
+        req.setAttribute("type", Strings.isBlank(type) ? "all" : type);
     }
 
-    @At("/read")
+    @At({"/read", "/read/?"})
     @Ok("beetl:/platform/sys/msg/user/indexRead.html")
     @RequiresPermissions("sys.msg.read")
-    public void read(HttpServletRequest req) {
-        req.setAttribute("status", "read");
+    public void read(String type, HttpServletRequest req) {
+        req.setAttribute("type", Strings.isBlank(type) ? "all" : type);
+
     }
 
-    @At("/unread")
+    @At({"/unread", "/unread/?"})
     @Ok("beetl:/platform/sys/msg/user/indexUnread.html")
     @RequiresPermissions("sys.msg.unread")
-    public void unread(HttpServletRequest req) {
-        req.setAttribute("status", "unread");
+    public void unread(String type, HttpServletRequest req) {
+        req.setAttribute("type", Strings.isBlank(type) ? "all" : type);
     }
 
     @At("/data/?")
     @Ok("json:full")
     @RequiresPermissions(value = {"sys.msg.all", "sys.msg.read", "sys.msg.unread"}, logical = Logical.OR)
-    public Object data(String status, @Param("type") String type, @Param("length") int length, @Param("start") int start, @Param("draw") int draw, @Param("::order") List<DataTableOrder> order, @Param("::columns") List<DataTableColumn> columns) {
-        Cnd cnd = Cnd.NEW();
-        if (Strings.isNotBlank(status) && "read".equals(status)) {
-            cnd.and("a.status", "=", 1);
+    public Object data(String status, @Param("searchType") String type, @Param("pageNumber") int pageNumber, @Param("pageSize") int pageSize, @Param("pageOrderName") String pageOrderName, @Param("pageOrderBy") String pageOrderBy) {
+        try {
+            Cnd cnd = Cnd.NEW();
+            if (Strings.isNotBlank(status) && "read".equals(status)) {
+                cnd.and("a.status", "=", 1);
+            }
+            if (Strings.isNotBlank(status) && "unread".equals(status)) {
+                cnd.and("a.status", "=", 0);
+            }
+            cnd.and("a.loginname", "=", StringUtil.getPlatformLoginname());
+            cnd.and("a.delFlag", "=", false);
+            cnd.desc("a.opAt");
+            if (Strings.isNotBlank(type) && !"all".equals(type)) {
+                cnd.and("b.type", "=", type);
+            }
+            Sql sql = Sqls.create("SELECT b.type,b.title,b.sendat,a.* FROM sys_msg b LEFT JOIN sys_msg_user a ON b.id=a.msgid $condition");
+            sql.setCondition(cnd);
+            Sql sqlCount = Sqls.create("SELECT count(*) FROM sys_msg b LEFT JOIN sys_msg_user a ON b.id=a.msgid $condition");
+            sqlCount.setCondition(cnd);
+            return Result.success().addData(sysMsgService.listPage(pageNumber, pageSize, sql, sqlCount));
+        } catch (Exception e) {
+            return Result.error();
         }
-        if (Strings.isNotBlank(status) && "unread".equals(status)) {
-            cnd.and("a.status", "=", 0);
-        }
-        cnd.and("a.loginname", "=", StringUtil.getPlatformLoginname());
-        cnd.and("a.delFlag", "=", false);
-        cnd.desc("a.opAt");
-        if (Strings.isNotBlank(type) && !"all".equals(type)) {
-            cnd.and("b.type", "=", type);
-        }
-        Sql sql = Sqls.create("SELECT b.type,b.title,b.sendat,a.* FROM sys_msg b LEFT JOIN sys_msg_user a ON b.id=a.msgid $condition");
-        sql.setCondition(cnd);
-        Sql sqlCount = Sqls.create("SELECT count(*) FROM sys_msg b LEFT JOIN sys_msg_user a ON b.id=a.msgid $condition");
-        sqlCount.setCondition(cnd);
-        return sysMsgUserService.data(length, start, draw, sqlCount, sql,true);
     }
 
     @At({"/delete/?", "/delete"})
@@ -89,16 +93,32 @@ public class SysMsgUserController {
     public Object delete(String id, @Param("ids") String[] ids, HttpServletRequest req) {
         try {
             if (ids != null && ids.length > 0) {
-                sysMsgUserService.vDelete(ids);
+                sysMsgUserService.update(Chain.make("delFlag", true)
+                        .add("opAt", Times.getTS()).add("opBy", StringUtil.getPlatformUid()), Cnd.where("id", "in", ids).and("loginname", "=", StringUtil.getPlatformLoginname()));
                 req.setAttribute("id", org.apache.shiro.util.StringUtils.toString(ids));
             } else {
-                sysMsgUserService.vDelete(id);
+                sysMsgUserService.update(Chain.make("delFlag", true)
+                        .add("opAt", Times.getTS()).add("opBy", StringUtil.getPlatformUid()), Cnd.where("id", "=", id).and("loginname", "=", StringUtil.getPlatformLoginname()));
                 req.setAttribute("id", id);
             }
             sysMsgUserService.deleteCache(StringUtil.getPlatformLoginname());
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
+        }
+    }
+
+    @At
+    @Ok("json")
+    @RequiresPermissions("sys.manager.msg")
+    public Object unread_num() {
+        try {
+            NutMap nutMap = NutMap.NEW();
+            nutMap.put("system", sysMsgUserService.count(Sqls.create("SELECT count(*) from sys_msg a,sys_msg_user b WHERE a.id=b.msgId AND a.type='system' AND a.delFlag=false AND b.status=0 AND b.delFlag=false AND b.loginname=@loginname").setParam("loginname", StringUtil.getPlatformLoginname())));
+            nutMap.put("user", sysMsgUserService.count(Sqls.create("SELECT count(*) from sys_msg a,sys_msg_user b WHERE a.id=b.msgId AND a.type='user' AND a.delFlag=false AND b.status=0 AND b.delFlag=false AND b.loginname=@loginname").setParam("loginname", StringUtil.getPlatformLoginname())));
+            return Result.success().addData(nutMap);
+        } catch (Exception e) {
+            return Result.error();
         }
     }
 
@@ -108,7 +128,8 @@ public class SysMsgUserController {
     @SLog(tag = "站内消息", msg = "${req.getAttribute('id')}")
     public Object read(@Param("ids") String[] ids, HttpServletRequest req) {
         try {
-            sysMsgUserService.update(Chain.make("status", 1), Cnd.where("id", "in", ids).and("loginname", "=", StringUtil.getPlatformLoginname()));
+            sysMsgUserService.update(Chain.make("status", 1).add("readAt", Times.getTS())
+                    .add("opAt", Times.getTS()).add("opBy", StringUtil.getPlatformUid()), Cnd.where("id", "in", ids).and("loginname", "=", StringUtil.getPlatformLoginname()));
             sysMsgUserService.deleteCache(StringUtil.getPlatformLoginname());
             req.setAttribute("id", org.apache.shiro.util.StringUtils.toString(ids));
             return Result.success("system.success");
@@ -123,11 +144,12 @@ public class SysMsgUserController {
     @SLog(tag = "站内消息", msg = "readAll")
     public Object readAll(HttpServletRequest req) {
         try {
-            sysMsgUserService.update(Chain.make("status", 1), Cnd.where("loginname", "=", StringUtil.getPlatformLoginname()));
+            sysMsgUserService.update(Chain.make("status", 1).add("readAt", Times.getTS())
+                    .add("opAt", Times.getTS()).add("opBy", StringUtil.getPlatformUid()), Cnd.where("loginname", "=", StringUtil.getPlatformLoginname()));
             sysMsgUserService.deleteCache(StringUtil.getPlatformLoginname());
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 

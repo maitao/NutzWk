@@ -7,11 +7,10 @@ import cn.wizzer.app.sys.modules.services.SysMenuService;
 import cn.wizzer.app.sys.modules.services.SysUnitService;
 import cn.wizzer.app.sys.modules.services.SysUserService;
 import cn.wizzer.app.web.commons.slog.annotation.SLog;
+import cn.wizzer.app.web.commons.utils.PageUtil;
 import cn.wizzer.app.web.commons.utils.ShiroUtil;
 import cn.wizzer.app.web.commons.utils.StringUtil;
 import cn.wizzer.framework.base.Result;
-import cn.wizzer.framework.page.datatable.DataTableColumn;
-import cn.wizzer.framework.page.datatable.DataTableOrder;
 import com.alibaba.dubbo.config.annotation.Reference;
 import org.apache.shiro.SecurityUtils;
 import org.apache.shiro.authz.annotation.RequiresAuthentication;
@@ -21,12 +20,16 @@ import org.apache.shiro.subject.Subject;
 import org.apache.shiro.util.ByteSource;
 import org.nutz.dao.Chain;
 import org.nutz.dao.Cnd;
+import org.nutz.integration.json4excel.J4E;
+import org.nutz.integration.json4excel.J4EColumn;
+import org.nutz.integration.json4excel.J4EConf;
 import org.nutz.ioc.loader.annotation.Inject;
 import org.nutz.ioc.loader.annotation.IocBean;
-import org.nutz.json.Json;
+import org.nutz.lang.Lang;
 import org.nutz.lang.Strings;
 import org.nutz.lang.Times;
 import org.nutz.lang.random.R;
+import org.nutz.lang.util.NutMap;
 import org.nutz.log.Log;
 import org.nutz.log.Logs;
 import org.nutz.mvc.annotation.At;
@@ -34,10 +37,10 @@ import org.nutz.mvc.annotation.Ok;
 import org.nutz.mvc.annotation.Param;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Created by wizzer on 2016/6/23.
@@ -66,59 +69,67 @@ public class SysUserController {
     }
 
     @At
-    @Ok("beetl:/platform/sys/user/add.html")
-    @RequiresPermissions("sys.manager.user")
-    public Object add(@Param("unitid") String unitid) {
-        return Strings.isBlank(unitid) ? null : sysUnitService.fetch(unitid);
-    }
-
-    @At
     @Ok("json")
     @RequiresPermissions("sys.manager.user.add")
     @SLog(tag = "新建用户", msg = "用户名:${args[0].loginname}")
     public Object addDo(@Param("..") Sys_user user, HttpServletRequest req) {
         try {
+            if (Strings.isNotBlank(user.getLoginname())) {
+                int num = sysUserService.count(Cnd.where("loginname", "=", Strings.trim(user.getLoginname())));
+                if (num > 0) {
+                    return Result.error("用户名已存在!");
+                }
+            }
+            if (Strings.isNotBlank(user.getMobile())) {
+                int num = sysUserService.count(Cnd.where("mobile", "=", Strings.trim(user.getMobile())));
+                if (num > 0) {
+                    return Result.error("手机号已存在!");
+                }
+            }
+            if (Strings.isNotBlank(user.getEmail())) {
+                int num = sysUserService.count(Cnd.where("email", "=", Strings.trim(user.getEmail())));
+                if (num > 0) {
+                    return Result.error("邮箱已存在!");
+                }
+            }
             String salt = R.UU32();
             user.setSalt(salt);
             user.setPassword(new Sha256Hash(user.getPassword(), ByteSource.Util.bytes(salt), 1024).toHex());
             user.setLoginPjax(true);
             user.setLoginCount(0);
-            user.setLoginAt(0L);
             user.setOpBy(StringUtil.getPlatformUid());
-            user.setOpAt(Times.getTS());
             sysUserService.insert(user);
             sysUserService.clearCache();
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
     @At("/edit/?")
-    @Ok("beetl:/platform/sys/user/edit.html")
+    @Ok("json")
     @RequiresPermissions("sys.manager.user")
     public Object edit(String id) {
-        return sysUserService.fetchLinks(sysUserService.fetch(id), "unit");
+        try {
+            return Result.success().addData(sysUserService.fetchLinks(sysUserService.fetch(id), "unit"));
+        } catch (Exception e) {
+            return Result.error();
+        }
     }
 
     @At
     @Ok("json")
     @RequiresPermissions("sys.manager.user.edit")
     @SLog(tag = "修改用户", msg = "用户名:${args[1]}->${args[0].loginname}")
-    public Object editDo(@Param("..") Sys_user user, @Param("oldLoginname") String oldLoginname, HttpServletRequest req) {
+    public Object editDo(@Param("..") Sys_user user, HttpServletRequest req) {
         try {
-            if (!Strings.sBlank(oldLoginname).equals(user.getLoginname())) {
-                Sys_user u = sysUserService.fetch(Cnd.where("loginname", "=", user.getLoginname()));
-                if (u != null)
-                    return Result.error("用户名已存在");
-            }
             user.setOpBy(StringUtil.getPlatformUid());
             user.setOpAt(Times.getTS());
             sysUserService.updateIgnoreNull(user);
             sysUserService.deleteCache(user.getId());
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -135,9 +146,9 @@ public class SysUserController {
             sysUserService.update(Chain.make("salt", salt).add("password", hashedPasswordBase64), Cnd.where("id", "=", id));
             sysUserService.deleteCache(user.getId());
             req.setAttribute("loginname", user.getLoginname());
-            return Result.success("system.success", pwd);
+            return Result.success().addData(pwd);
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -152,11 +163,11 @@ public class SysUserController {
                 return Result.error("system.not.allow");
             }
             sysUserService.deleteById(userId);
-            sysUserService.deleteCache(userId);
+            sysUserService.deleteCache(user.getId());
             req.setAttribute("loginname", user.getLoginname());
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -177,9 +188,9 @@ public class SysUserController {
             sysUserService.deleteByIds(userIds);
             sysUserService.clearCache();
             req.setAttribute("ids", sb.toString());
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -192,9 +203,9 @@ public class SysUserController {
             req.setAttribute("loginname", sysUserService.fetch(userId).getLoginname());
             sysUserService.update(Chain.make("disabled", false), Cnd.where("id", "=", userId));
             sysUserService.deleteCache(userId);
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -211,110 +222,112 @@ public class SysUserController {
             req.setAttribute("loginname", loginname);
             sysUserService.update(Chain.make("disabled", true), Cnd.where("id", "=", userId));
             sysUserService.deleteCache(userId);
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
-    }
-
-    @At("/detail/?")
-    @Ok("beetl:/platform/sys/user/detail.html")
-    @RequiresPermissions("sys.manager.user")
-    public Object detail(String id) {
-        if (!Strings.isBlank(id)) {
-            Sys_user user = sysUserService.fetch(id);
-            return sysUserService.fetchLinks(user, "roles");
-        }
-        return null;
     }
 
     @At("/menu/?")
-    @Ok("beetl:/platform/sys/user/menu.html")
-    @RequiresPermissions("sys.manager.user")
-    public Object menu(String id, HttpServletRequest req) {
-        Sys_user user = sysUserService.fetch(id);
-        List<Sys_menu> menus = sysUserService.getMenusAndButtons(id);
-        List<Sys_menu> datas = sysUserService.getDatas(id);
-        List<Sys_menu> firstMenus = new ArrayList<>();
-        List<Sys_menu> secondMenus = new ArrayList<>();
-        for (Sys_menu menu : menus) {
-            for (Sys_menu bt : datas) {
-                if (menu.getPath().equals(bt.getPath().substring(0, bt.getPath().length() - 4))) {
-                    menu.setHasChildren(true);
-                    break;
-                }
-            }
-            if (menu.getPath().length() == 4) {
-                firstMenus.add(menu);
-            } else {
-                secondMenus.add(menu);
-            }
-        }
-        req.setAttribute("userFirstMenus", firstMenus);
-        req.setAttribute("userSecondMenus", secondMenus);
-        req.setAttribute("jsonSecondMenus", Json.toJson(secondMenus));
-        return user;
-    }
-
-    @At
-    @Ok("json:{locked:'password|salt',ignoreNull:false}") // 忽略password和createAt属性,忽略空属性的json输出
-    @RequiresPermissions("sys.manager.user")
-    public Object data(@Param("unitid") String unitid, @Param("loginname") String loginname, @Param("username") String username, @Param("length") int length, @Param("start") int start, @Param("draw") int draw, @Param("::order") List<DataTableOrder> order, @Param("::columns") List<DataTableColumn> columns) {
-        Cnd cnd = Cnd.NEW();
-        if (!Strings.isBlank(unitid) && !"root".equals(unitid))
-            cnd.and("unitid", "=", unitid);
-        if (!Strings.isBlank(loginname))
-            cnd.and("loginname", "like", "%" + loginname + "%");
-        if (!Strings.isBlank(username))
-            cnd.and("username", "like", "%" + username + "%");
-        return sysUserService.data(length, start, draw, order, columns, cnd, null);
-    }
-
-    @At
     @Ok("json")
     @RequiresPermissions("sys.manager.user")
-    public Object tree(@Param("pid") String pid) {
-        List<Sys_unit> list = new ArrayList<>();
-        List<Map<String, Object>> tree = new ArrayList<>();
-        Map<String, Object> obj = new HashMap<>();
-        if (shiroUtil.hasRole("sysadmin")) {
-            Cnd cnd = Cnd.NEW();
-            if (Strings.isBlank(pid)) {
-                cnd.and("parentId", "=", "").or("parentId", "is", null);
-            } else {
-                cnd.and("parentId", "=", pid);
-            }
-            cnd.asc("path");
-            list = sysUnitService.query(cnd);
-            if (Strings.isBlank(pid)) {
-                obj.put("id", "root");
-                obj.put("text", "所有用户");
-                obj.put("children", false);
-                tree.add(obj);
-            }
-        } else {
-            Sys_user user = (Sys_user) shiroUtil.getPrincipal();
-            if (user != null && Strings.isBlank(pid)) {
-                list = sysUnitService.query(Cnd.where("id", "=", user.getUnitid()).asc("path"));
-            } else {
-                Cnd cnd = Cnd.NEW();
-                if (Strings.isBlank(pid)) {
-                    cnd.and("parentId", "=", "").or("parentId", "is", null);
-                } else {
-                    cnd.and("parentId", "=", pid);
+    public Object menu(String id, @Param("pid") String pid, HttpServletRequest req) {
+        try {
+            List<Sys_menu> list = sysUserService.getRoleMenus(id, pid);
+            List<NutMap> treeList = new ArrayList<>();
+            for (Sys_menu unit : list) {
+                if (!unit.isHasChildren() && sysUserService.hasChildren(id, unit.getId())) {
+                    unit.setHasChildren(true);
                 }
-                cnd.asc("path");
-                list = sysUnitService.query(cnd);
+                NutMap map = Lang.obj2nutmap(unit);
+                map.addv("expanded", false);
+                map.addv("children", new ArrayList<>());
+                treeList.add(map);
             }
+            return Result.success().addData(treeList);
+        } catch (Exception e) {
+            return Result.error();
         }
-        for (Sys_unit unit : list) {
-            obj = new HashMap<>();
-            obj.put("id", unit.getId());
-            obj.put("text", unit.getName());
-            obj.put("children", unit.isHasChildren());
-            tree.add(obj);
+    }
+
+    @At
+    @Ok("json:{locked:'password|salt',ignoreNull:false}")
+    @RequiresPermissions("sys.manager.user")
+    public Object data(@Param("searchUnit") String searchUnit, @Param("searchName") String searchName, @Param("searchKeyword") String searchKeyword, @Param("pageNumber") int pageNumber, @Param("pageSize") int pageSize, @Param("pageOrderName") String pageOrderName, @Param("pageOrderBy") String pageOrderBy) {
+        try {
+            Cnd cnd = Cnd.NEW();
+            if (shiroUtil.hasRole("sysadmin")) {
+                if (Strings.isNotBlank(searchUnit)) {
+                    cnd.and("unitid", "=", searchUnit);
+                }
+            } else {
+                Sys_user user = (Sys_user) shiroUtil.getPrincipal();
+                if (Strings.isNotBlank(searchUnit)) {
+                    Sys_unit unit = sysUnitService.fetch(searchUnit);
+                    if (unit == null || !unit.getPath().startsWith(user.getUnit().getPath())) {
+                        //防止有人越级访问
+                        return Result.error("非法操作");
+                    } else
+                        cnd.and("unitid", "=", searchUnit);
+                } else {
+                    cnd.and("unitid", "=", user.getUnitid());
+                }
+            }
+            if (Strings.isNotBlank(searchName) && Strings.isNotBlank(searchKeyword)) {
+                cnd.and(searchName, "like", "%" + searchKeyword + "%");
+            }
+            if (Strings.isNotBlank(pageOrderName) && Strings.isNotBlank(pageOrderBy)) {
+                cnd.orderBy(pageOrderName, PageUtil.getOrder(pageOrderBy));
+            }
+            return Result.success().addData(sysUserService.listPageLinks(pageNumber, pageSize, cnd, "unit"));
+        } catch (Exception e) {
+            return Result.error();
         }
-        return tree;
+    }
+
+    @At
+    @Ok("void")
+    @RequiresPermissions("sys.manager.user")
+    public void export(@Param("searchUnit") String searchUnit, @Param("searchName") String searchName, @Param("searchKeyword") String searchKeyword, @Param("pageOrderName") String pageOrderName, @Param("pageOrderBy") String pageOrderBy, HttpServletResponse response) {
+        try {
+            J4EConf j4eConf = J4EConf.from(Sys_user.class);
+            List<J4EColumn> jcols = j4eConf.getColumns();
+            for (J4EColumn j4eColumn : jcols) {
+                if ("opBy".equals(j4eColumn.getFieldName()) || "opAt".equals(j4eColumn.getFieldName()) || "delFlag".equals(j4eColumn.getFieldName())) {
+                    j4eColumn.setIgnore(true);
+                }
+            }
+            Cnd cnd = Cnd.NEW();
+            if (shiroUtil.hasRole("sysadmin")) {
+                if (Strings.isNotBlank(searchUnit)) {
+                    cnd.and("unitid", "=", searchUnit);
+                }
+            } else {
+                Sys_user user = (Sys_user) shiroUtil.getPrincipal();
+                if (Strings.isNotBlank(searchUnit)) {
+                    Sys_unit unit = sysUnitService.fetch(searchUnit);
+                    if (unit == null || !unit.getPath().startsWith(user.getUnit().getPath())) {
+                        //防止有人越级访问
+                        throw Lang.makeThrow("非法操作");
+                    } else
+                        cnd.and("unitid", "=", searchUnit);
+                } else {
+                    cnd.and("unitid", "=", user.getUnitid());
+                }
+            }
+            if (Strings.isNotBlank(searchName) && Strings.isNotBlank(searchKeyword)) {
+                cnd.and(searchName, "like", "%" + searchKeyword + "%");
+            }
+            if (Strings.isNotBlank(pageOrderName) && Strings.isNotBlank(pageOrderBy)) {
+                cnd.orderBy(pageOrderName, PageUtil.getOrder(pageOrderBy));
+            }
+            OutputStream out = response.getOutputStream();
+            response.setHeader("content-type", "application/shlnd.ms-excel;charset=utf-8");
+            response.setHeader("content-disposition", "attachment; filename=" + new String("用户信息".getBytes(), "ISO-8859-1") + ".xls");
+            J4E.toExcel(out, sysUserService.query(cnd, "unit"), j4eConf);
+        } catch (Exception e) {
+            log.error(e.getMessage(), e);
+        }
     }
 
     @At
@@ -343,7 +356,7 @@ public class SysUserController {
     @RequiresAuthentication
     public Object modeDo(@Param("mode") String mode, HttpServletRequest req) {
         try {
-            sysUserService.update(Chain.make("loginPjax", "true".equals(mode)), Cnd.where("id", "=", req.getAttribute("uid")));
+            sysUserService.update(Chain.make("loginPjax", "true".equals(mode)), Cnd.where("id", "=", StringUtil.getPlatformUid()));
             Subject subject = SecurityUtils.getSubject();
             Sys_user user = (Sys_user) subject.getPrincipal();
             if ("true".equals(mode)) {
@@ -352,9 +365,9 @@ public class SysUserController {
                 user.setLoginPjax(false);
             }
             sysUserService.deleteCache(user.getId());
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -367,7 +380,7 @@ public class SysUserController {
             sysUserService.update(Chain.make("customMenu", ids), Cnd.where("id", "=", StringUtil.getPlatformUid()));
             Subject subject = SecurityUtils.getSubject();
             Sys_user user = (Sys_user) subject.getPrincipal();
-            if (!Strings.isBlank(ids)) {
+            if (Strings.isNotBlank(ids)) {
                 user.setCustomMenu(ids);
                 user.setCustomMenus(sysMenuService.query(Cnd.where("id", "in", ids.split(","))));
             } else {
@@ -375,9 +388,9 @@ public class SysUserController {
                 user.setCustomMenus(new ArrayList<>());
             }
             sysUserService.deleteCache(user.getId());
-            return Result.success("system.success");
+            return Result.success();
         } catch (Exception e) {
-            return Result.error("system.error");
+            return Result.error();
         }
     }
 
@@ -395,9 +408,9 @@ public class SysUserController {
             user.setPassword(hashedPasswordBase64);
             sysUserService.update(Chain.make("salt", salt).add("password", hashedPasswordBase64), Cnd.where("id", "=", user.getId()));
             sysUserService.deleteCache(user.getId());
-            return Result.success("修改成功");
+            return Result.success();
         } else {
-            return Result.error("原密码不正确");
+            return Result.error();
         }
     }
 }

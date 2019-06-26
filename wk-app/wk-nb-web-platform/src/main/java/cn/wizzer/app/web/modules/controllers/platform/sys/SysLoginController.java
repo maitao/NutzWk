@@ -9,7 +9,6 @@ import cn.wizzer.app.web.commons.shiro.exception.CaptchaEmptyException;
 import cn.wizzer.app.web.commons.shiro.exception.CaptchaIncorrectException;
 import cn.wizzer.app.web.commons.shiro.filter.PlatformAuthenticationFilter;
 import cn.wizzer.app.web.commons.slog.SLogService;
-import cn.wizzer.app.web.commons.utils.RSAUtil;
 import cn.wizzer.framework.base.Result;
 import com.alibaba.dubbo.config.annotation.Reference;
 import org.apache.commons.lang3.math.NumberUtils;
@@ -41,9 +40,6 @@ import org.nutz.mvc.annotation.*;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpSession;
 import java.awt.image.BufferedImage;
-import java.security.interfaces.RSAPrivateKey;
-import java.security.interfaces.RSAPublicKey;
-import java.util.HashMap;
 
 /**
  * Created by wizzer on 2016/6/22.
@@ -69,10 +65,7 @@ public class SysLoginController {
     @Ok("re")
     @Filters
     public String login(HttpServletRequest req, HttpSession session) {
-//        Subject subject = SecurityUtils.getSubject();
-//        if (subject.isAuthenticated()) {
-//            return "redirect:/platform/home";
-//        } else {
+//        RSA加密删了，需要的用的自己启用
 //        try {
 //            HashMap<String, Object> map = RSAUtil.getKeys();
 //            //生成公钥和私钥
@@ -116,6 +109,26 @@ public class SysLoginController {
                 Sys_user user = (Sys_user) subject.getPrincipal();
                 user.setLoginTheme(theme);
                 sysUserService.update(Chain.make("loginTheme", theme), Cnd.where("id", "=", user.getId()));
+                sysUserService.deleteCache(user.getId());
+            }
+        }
+    }
+
+    /**
+     * 切换菜单位置，对登陆用户有效
+     *
+     * @param theme
+     * @param req
+     */
+    @At("/menuTheme")
+    @RequiresAuthentication
+    public void menuTheme(@Param("menuTheme") String theme, HttpServletRequest req) {
+        if (!Strings.isEmpty(theme)) {
+            Subject subject = SecurityUtils.getSubject();
+            if (subject != null) {
+                Sys_user user = (Sys_user) subject.getPrincipal();
+                user.setMenuTheme(theme);
+                sysUserService.update(Chain.make("menuTheme", theme), Cnd.where("id", "=", user.getId()));
                 sysUserService.deleteCache(user.getId());
             }
         }
@@ -266,7 +279,7 @@ public class SysLoginController {
             h = 60;
         }
         String text = R.captchaNumber(4);
-        redisService.setex("platformCaptcha:" + session.getId(),300, text);
+        redisService.setex("platformCaptcha:" + session.getId(), 300, text);
         return Images.createCaptcha(text, w, h, null, null, null);
     }
 }

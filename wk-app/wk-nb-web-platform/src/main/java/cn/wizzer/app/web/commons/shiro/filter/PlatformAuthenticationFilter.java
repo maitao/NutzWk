@@ -2,7 +2,6 @@ package cn.wizzer.app.web.commons.shiro.filter;
 
 
 import cn.wizzer.app.web.commons.shiro.token.PlatformCaptchaToken;
-import cn.wizzer.app.web.commons.utils.RSAUtil;
 import org.apache.shiro.authc.AuthenticationToken;
 import org.apache.shiro.web.filter.authc.FormAuthenticationFilter;
 import org.apache.shiro.web.util.WebUtils;
@@ -15,7 +14,6 @@ import org.nutz.mvc.View;
 
 import javax.servlet.ServletRequest;
 import javax.servlet.http.HttpServletRequest;
-import java.security.interfaces.RSAPrivateKey;
 
 /**
  * Created by wizzer on 2017/1/10.
@@ -39,6 +37,7 @@ public class PlatformAuthenticationFilter extends FormAuthenticationFilter imple
         String captcha = getCaptcha(request);
         boolean rememberMe = isRememberMe(request);
         String host = getHost(request);
+//      RSA加密删除了，需要用到的自己启用
 //        try {
 //            RSAPrivateKey platformPrivateKey = (RSAPrivateKey) request.getSession().getAttribute("platformPrivateKey");
 //            if (platformPrivateKey != null) {
