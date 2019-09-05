@@ -19,6 +19,7 @@
         <module>wk-nb-web-api</module>
         <module>wk-nb-task</module>
         <module>wk-nb-web-vue</module>
+        <module>wk-nb-service-mt</module>
     </modules>
     <groupId>cn.wizzer.app</groupId>
     <artifactId>wk-app</artifactId>
