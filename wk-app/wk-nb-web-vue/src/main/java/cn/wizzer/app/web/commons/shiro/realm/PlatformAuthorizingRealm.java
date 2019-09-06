@@ -57,6 +57,12 @@ public class PlatformAuthorizingRealm extends AuthorizingRealm {
         return redisService;
     }
 
+    /**
+     * 提供账户信息返回认证信息 mt20190906
+     * @param token
+     * @return
+     * @throws AuthenticationException
+     */
     @Override
     protected AuthenticationInfo doGetAuthenticationInfo(AuthenticationToken token) throws AuthenticationException {
         if (token.getClass().isAssignableFrom(PlatformCaptchaToken.class)) {
@@ -98,6 +104,12 @@ public class PlatformAuthorizingRealm extends AuthorizingRealm {
         return null;
     }
 
+    /**
+     * 提供用户信息返回权限信息 mt20190906
+     * @param token
+     * @return
+     * @throws AuthenticationException
+     */
     /**
      * 授权查询回调函数, 进行鉴权但缓存中无用户的授权信息时调用.
      */
